@@ -1,0 +1,49 @@
+# Node
+node_modules/
+.env
+npm-debug.log*
+yarn-error.log*
+
+# Logs
+logs/
+*.log
+
+# Build
+/dist
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Coverage
+coverage/
+
+# Misc
+*.swp
+*.swo
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/node_modules/
+backend/uploads/
+backend/dist/
+
+# PDF/OCR temp
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.bmp
+*.gif
+
+# Others
+*.tmp
+*.bak
