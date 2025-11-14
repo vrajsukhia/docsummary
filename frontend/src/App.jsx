@@ -8,7 +8,11 @@ function isGeminiRetryMessage(msg) {
 }
 
 export default function SummarizerView() {
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  // Use Vercel URL in production, fallback to localhost in dev
+  const apiBaseUrl =
+    typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app')
+      ? 'https://docsummary.vercel.app'
+      : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [summary, setSummary] = useState('');
