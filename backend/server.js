@@ -3,10 +3,10 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -28,24 +28,37 @@ const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '4000', 10);
 const MAX_CHUNK_CONCURRENCY = parseInt(process.env.MAX_CHUNK_CONCURRENCY || '3', 10);
 const GEMINI_RETRY_LIMIT = parseInt(process.env.GEMINI_RETRY_LIMIT || '3', 10);
 const GEMINI_RETRY_DELAY_MS = parseInt(process.env.GEMINI_RETRY_DELAY_MS || '2000', 10);
+const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DB = process.env.MONGODB_DB || 'docsummary';
+const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || 'uploads';
+
+if (!MONGODB_URI) {
+  throw new Error('MONGODB_URI is required to store uploads temporarily in MongoDB Atlas.');
+}
+
+const mongoClient = new MongoClient(MONGODB_URI, {
+  maxPoolSize: 5,
+  serverSelectionTimeoutMS: 10000,
+});
+
+let mongoConnectionPromise = null;
+
+async function getUploadsCollection() {
+  if (!mongoConnectionPromise) {
+    mongoConnectionPromise = mongoClient.connect();
+  }
+  const client = await mongoConnectionPromise;
+  return client.db(MONGODB_DB).collection(MONGODB_COLLECTION);
+}
 
 // Middleware
 app.use(cors({ origin: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Ensure uploads folder exists
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
-
-// Multer setup for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname),
-});
-
+// Multer setup for file uploads (memory storage -> MongoDB)
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
   fileFilter: (req, file, cb) => {
     const allowed = /pdf|png|jpg|jpeg/;
@@ -59,8 +72,7 @@ const upload = multer({
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Extract text from PDF
-async function extractTextFromPDF(filePath) {
-  const buffer = fs.readFileSync(filePath);
+async function extractTextFromPDF(buffer) {
   const originalWarn = console.warn;
   console.warn = (msg, ...rest) => {
     if (typeof msg === 'string' && msg.includes('TT: undefined function')) return;
@@ -75,8 +87,8 @@ async function extractTextFromPDF(filePath) {
 }
 
 // Extract text from image
-async function extractTextFromImage(filePath) {
-  const { data: { text } } = await Tesseract.recognize(filePath, OCR_LANG);
+async function extractTextFromImage(buffer) {
+  const { data: { text } } = await Tesseract.recognize(buffer, OCR_LANG);
   return text;
 }
 
@@ -283,19 +295,33 @@ app.get('/', (req, res) => res.send('Document Summary Assistant API running'));
 
 // Upload endpoint
 app.post('/upload', upload.single('file'), async (req, res) => {
+  let uploadsCollection;
+  let storedUploadId = null;
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    uploadsCollection = await getUploadsCollection();
 
     const summaryLength = req.body.length || 'medium';
-    const filePath = req.file.path;
     const ext = path.extname(req.file.originalname).toLowerCase();
+    const fileBuffer = req.file.buffer;
+
+    const insertResult = await uploadsCollection.insertOne({
+      name: req.file.originalname,
+      mime: req.file.mimetype,
+      size: req.file.size,
+      data: fileBuffer,
+      createdAt: new Date(),
+    });
+  storedUploadId = insertResult.insertedId;
 
     let extractedText = '';
-    if (ext === '.pdf') extractedText = await extractTextFromPDF(filePath);
-    else extractedText = await extractTextFromImage(filePath);
+    if (ext === '.pdf') extractedText = await extractTextFromPDF(fileBuffer);
+    else extractedText = await extractTextFromImage(fileBuffer);
 
     if (!extractedText || !extractedText.trim()) {
-      fs.unlinkSync(filePath);
       return res.status(400).json({ error: 'No text could be extracted from the document' });
     }
 
@@ -303,12 +329,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     try {
       analysis = await generateAnalysis(extractedText, summaryLength);
     } catch (aiError) {
-      fs.unlinkSync(filePath);
-      // Only respond after all fallback attempts fail
       return res.status(500).json({ success: false, error: aiError.message });
     }
-
-    fs.unlinkSync(filePath); // clean up uploaded file
 
     res.json({
       success: true,
@@ -329,9 +351,24 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
   } catch (e) {
     console.error(e);
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ success: false, error: e.message });
+  } finally {
+    if (uploadsCollection && storedUploadId) {
+      uploadsCollection.deleteOne({ _id: storedUploadId }).catch((cleanupErr) => {
+        console.error('Failed to delete temporary upload from MongoDB:', cleanupErr);
+      });
+    }
   }
+});
+
+process.on('SIGINT', async () => {
+  if (mongoClient) await mongoClient.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  if (mongoClient) await mongoClient.close();
+  process.exit(0);
 });
 
 // Start server

@@ -7,10 +7,10 @@ AI-powered assistant that ingests PDFs or scanned images, extracts their text, a
 - **Automated text extraction** via `pdf-parse` for digital PDFs and `tesseract.js` OCR for scans.
 - **Gemini-powered analysis** with short/medium/long summary modes, bullet key points, highlights, and improvement suggestions.
 - **Responsive React UI** with live previews, loading states, and document insights.
-- **API-first backend** ready for deployment on Render, Railway, Vercel, or any Node-friendly host.
+- **API-first backend** ready for deployment on Render, Railway, Vercel, or any Node-friendly host, now leveraging MongoDB Atlas for ephemeral upload storage.
 
 ## Architecture & Workflow
-1. **Upload & Validation** – `multer` stores the file temporarily (50 MB max) and enforces PDF/image types.
+1. **Upload & Validation** – `multer` stores the file in memory (50 MB max) before persisting it briefly inside MongoDB Atlas, while enforcing PDF/image types.
 2. **Text Extraction** – PDFs pass through `pdf-parse`; images flow through `tesseract.js` (language configurable via `OCR_LANG`).
 3. **Normalization & Chunking** – whitespace is condensed, text is sliced into `CHUNK_SIZE` batches, and large documents run through Gemini in parallel before being stitched back together.
 4. **AI Analysis** – Three parallel Gemini prompts create: (a) prose summary tuned to the selected length, (b) 5‑7 bullet key points, (c) three improvement suggestions.
@@ -19,7 +19,7 @@ AI-powered assistant that ingests PDFs or scanned images, extracts their text, a
 
 ## Tech Stack
 - **Frontend:** React 18 + Vite, Axios, modern CSS.
-- **Backend:** Node 18+, Express 5, Multer, pdf-parse, Tesseract.js, @google/generative-ai.
+- **Backend:** Node 18+, Express 5, Multer, pdf-parse, Tesseract.js, @google/generative-ai, MongoDB Atlas.
 - **AI:** Google Gemini 1.5 Flash (configurable).
 
 ## Getting Started
@@ -39,6 +39,9 @@ CHUNK_SIZE=4000
 MAX_CHUNK_CONCURRENCY=3
 GEMINI_RETRY_LIMIT=3
 GEMINI_RETRY_DELAY_MS=2000
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net
+MONGODB_DB=docsummary (optional)
+MONGODB_COLLECTION=uploads (optional)
 ```
 
 Create `frontend/.env`:
@@ -83,7 +86,7 @@ Errors follow `{ success: false, error: "message" }`.
 
 ## Deployment Notes
 - **Frontend:** Deploy via Netlify/Vercel. Point `VITE_API_URL` to your hosted backend URL.
-- **Backend:** Any Node host works. Remember to add `GEMINI_API_KEY` and increase `MAX_INPUT_CHARS` only if your quota allows.
+- **Backend:** Any Node host works. Remember to add `GEMINI_API_KEY`, `MONGODB_URI`, and increase `MAX_INPUT_CHARS` only if your quota allows.
 - Use HTTPS for both tiers before sharing the public link.
 
 ## Validation
