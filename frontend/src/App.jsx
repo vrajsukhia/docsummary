@@ -111,7 +111,11 @@ export default function SummarizerView() {
       }
       setWaitingForGemini(false);
     } catch (e) {
-      const friendly = e?.response?.data?.error || e.message;
+      let friendly = e?.response?.data?.error || e.message;
+      // Defensive: If error is an object, convert to string
+      if (typeof friendly === 'object') {
+        friendly = friendly.message || JSON.stringify(friendly);
+      }
       if (isGeminiRetryMessage(friendly)) {
         setWaitingForGemini(true);
         setStatus('Waiting for Gemini API quota...');
